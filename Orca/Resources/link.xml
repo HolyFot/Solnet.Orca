@@ -1,0 +1,10 @@
+<linker>
+  
+  <!--Preserve Orca assembly-->
+
+  <assembly fullname="Orca">
+    <namespace fullname="Orca" preserve="all"/>
+    <type fullname="Orca.*" preserve="all"/>
+  </assembly>
+
+</linker>
