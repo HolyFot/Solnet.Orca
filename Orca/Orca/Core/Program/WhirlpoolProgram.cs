@@ -1,11 +1,10 @@
 using System;
 using System.Numerics;
 using System.Collections.Generic;
-
 using Solnet.Programs.Utilities;
 using Solnet.Wallet;
-
 using Orca.Types;
+using Solnet.Rpc.Models;
 
 namespace Orca.Program
 {
@@ -414,6 +413,7 @@ namespace Orca.Program
                 Solnet.Rpc.Models.AccountMeta.Writable(accounts.TickArray2, false),
                 Solnet.Rpc.Models.AccountMeta.ReadOnly(accounts.Oracle, false)
             };
+
             byte[] data = new byte[1200];
             int offset = 0;
             data.WriteU64(14449647541112719096UL, offset);
@@ -636,6 +636,172 @@ namespace Orca.Program
             byte[] resultData = new byte[offset];
             Array.Copy(data, resultData, offset);
             return new Solnet.Rpc.Models.TransactionInstruction
+            { Keys = keys, ProgramId = programId.KeyBytes, Data = resultData };
+        }
+
+        /// <summary>
+        /// Gets Instructions for a SwapV2 transaction.
+        /// </summary>
+        /// <param name="accounts">The accounts for the SwapV2 instruction.</param>
+        /// <param name="amount">The amount to swap.</param>
+        /// <param name="otherAmountThreshold">The other amount threshold.</param>
+        /// <param name="sqrtPriceLimit">The sqrt price limit.</param>
+        /// <param name="amountSpecifiedIsInput">Whether the amount specified is input.</param>
+        /// <param name="aToB">Whether the swap is from A to B.</param>
+        /// <param name="feePayer">The fee payer for the transaction.</param>
+        /// <param name="signingCallback">The callback for signing the transaction.</param>
+        /// <param name="programId">The program ID.</param>
+        /// <param name="supplementalTickArrays">Optional list of supplemental tick arrays.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the request result.</returns>
+        public static TransactionInstruction SwapV2(
+            SwapV2Accounts accounts, ulong amount, ulong otherAmountThreshold,
+            BigInteger sqrtPriceLimit, bool amountSpecifiedIsInput, bool aToB, PublicKey programId,
+            List<AccountMeta> supplementalTickArrays = null)
+        {
+            List<AccountMeta> keys = new()
+            {
+                AccountMeta.ReadOnly(accounts.TokenProgramA, false), // Token Program for A
+                AccountMeta.ReadOnly(accounts.TokenProgramB, false), // Token Program for B
+                AccountMeta.ReadOnly(accounts.MemoProgram, false),   // Memo Program
+                AccountMeta.ReadOnly(accounts.TokenAuthority, true), // Signer
+                AccountMeta.Writable(accounts.Whirlpool, false),
+                AccountMeta.ReadOnly(accounts.TokenMintA, false),    // Token Mint A
+                AccountMeta.ReadOnly(accounts.TokenMintB, false),    // Token Mint B
+                AccountMeta.Writable(accounts.TokenOwnerAccountA, false),
+                AccountMeta.Writable(accounts.TokenVaultA, false),
+                AccountMeta.Writable(accounts.TokenOwnerAccountB, false),
+                AccountMeta.Writable(accounts.TokenVaultB, false),
+                AccountMeta.Writable(accounts.TickArray0, false),
+                AccountMeta.Writable(accounts.TickArray1, false),
+                AccountMeta.Writable(accounts.TickArray2, false),
+                AccountMeta.ReadOnly(accounts.Oracle, false)
+            };
+
+            // Add supplemental tick arrays if provided
+            if (supplementalTickArrays != null)
+            {
+                foreach (var tickArrayMeta in supplementalTickArrays)
+                {
+                    // Ensure they are marked writable as per TS SDK example
+                    keys.Add(AccountMeta.Writable(new PublicKey(tickArrayMeta.PublicKey), false));
+                }
+            }
+
+            byte[] data = new byte[1200]; // Adjust size if necessary, similar to V1
+            int offset = 0;
+
+            // Write the V2 discriminator
+            data.WriteU64(14449647541112719097UL, offset);
+            offset += 8;
+
+            // Write the instruction arguments (assuming they are the same as V1)
+            data.WriteU64(amount, offset);
+            offset += 8;
+            data.WriteU64(otherAmountThreshold, offset);
+            offset += 8;
+            data.WriteBigInt(sqrtPriceLimit, offset, 16, true); // Assuming 128-bit BigInteger
+            offset += 16;
+            data.WriteBool(amountSpecifiedIsInput, offset);
+            offset += 1;
+            data.WriteBool(aToB, offset);
+            offset += 1;
+
+            // Finalize data buffer
+            byte[] resultData = new byte[offset];
+            Array.Copy(data, resultData, offset);
+
+            return new TransactionInstruction
+            {
+                Keys = keys,
+                ProgramId = programId.KeyBytes,
+                Data = resultData
+            };
+        }
+
+        /// <summary>
+        /// Creates a <see cref="TransactionInstruction"/> for the OpenPositionV2 instruction.
+        /// This is used when the position mint is a Token-2022 mint.
+        /// </summary>
+        /// <param name="accounts">The accounts required for opening the position with token extensions.</param>
+        /// <param name="bumps">The bumps for PDAs related to the position and its metadata.</param>
+        /// <param name="tickLowerIndex">The lower tick index for the position.</param>
+        /// <param name="tickUpperIndex">The upper tick index for the position.</param>
+        /// <param name="programId">The Whirlpool program ID.</param>
+        /// <returns>The <see cref="TransactionInstruction"/>.</returns>
+        public static TransactionInstruction OpenPositionV2(
+            OpenPositionWithTokenExtensionsAccounts accounts,
+            OpenPositionWithMetadataBumps bumps, // Reusing bumps from metadata variant
+            int tickLowerIndex,
+            int tickUpperIndex,
+            PublicKey programId)
+        {
+            var keys = new List<AccountMeta>
+            {
+                AccountMeta.Writable(accounts.Funder, true),
+                AccountMeta.ReadOnly(accounts.Owner, false),
+                AccountMeta.Writable(accounts.Position, false),
+                AccountMeta.Writable(accounts.PositionMint, true),
+                AccountMeta.Writable(accounts.PositionMetadataAccount, false), // Metadata account
+                AccountMeta.Writable(accounts.PositionTokenAccount, false),
+                AccountMeta.ReadOnly(accounts.Whirlpool, false),
+                AccountMeta.ReadOnly(accounts.Token2022Program, false), // Explicitly Token-2022 Program
+                AccountMeta.ReadOnly(accounts.SystemProgram, false),
+                AccountMeta.ReadOnly(accounts.Rent, false),
+                AccountMeta.ReadOnly(accounts.AssociatedTokenProgram, false),
+                AccountMeta.ReadOnly(accounts.MetadataProgram, false),      // Metadata Program
+                AccountMeta.ReadOnly(accounts.MetadataUpdateAuth, false) // Metadata Update Authority
+            };
+
+            byte[] data = new byte[1200]; // Adjust size if necessary
+            int offset = 0;
+
+            data.WriteU64(4327517488150879731UL, offset); //OpenPositionWithTokenExtensionsDiscriminator
+            offset += 8;
+            offset += bumps.Serialize(data, offset);
+            data.WriteS32(tickLowerIndex, offset);
+            offset += 4;
+            data.WriteS32(tickUpperIndex, offset);
+            offset += 4;
+
+            byte[] resultData = new byte[offset];
+            Array.Copy(data, resultData, offset);
+
+            return new TransactionInstruction
+            { Keys = keys, ProgramId = programId.KeyBytes, Data = resultData };
+        }
+
+
+        /// <summary>
+        /// Creates a <see cref="TransactionInstruction"/> for the ClosePositionV2 instruction.
+        /// This is used when the position mint is a Token-2022 mint.
+        /// </summary>
+        /// <param name="accounts">The accounts required for closing the position with token extensions.</param>
+        /// <param name="programId">The Whirlpool program ID.</param>
+        /// <returns>The <see cref="TransactionInstruction"/>.</returns>
+        public static TransactionInstruction ClosePositionV2(
+            ClosePositionWithTokenExtensionsAccounts accounts,
+            PublicKey programId)
+        {
+            var keys = new List<AccountMeta>
+            {
+                AccountMeta.ReadOnly(accounts.PositionAuthority, true),
+                AccountMeta.Writable(accounts.Receiver, false),
+                AccountMeta.Writable(accounts.Position, false),
+                AccountMeta.Writable(accounts.PositionMint, false),
+                AccountMeta.Writable(accounts.PositionTokenAccount, false),
+                AccountMeta.ReadOnly(accounts.Token2022Program, false) // Explicitly Token-2022 Program
+            };
+
+            byte[] data = new byte[1200]; // Adjust size if necessary
+            int offset = 0;
+
+            data.WriteU64(7089303740684011132UL, offset); //ClosePositionWithTokenExtensionsDiscriminator
+            offset += 8;
+
+            byte[] resultData = new byte[offset];
+            Array.Copy(data, resultData, offset);
+
+            return new TransactionInstruction
             { Keys = keys, ProgramId = programId.KeyBytes, Data = resultData };
         }
     }

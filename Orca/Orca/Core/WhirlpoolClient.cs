@@ -367,6 +367,94 @@ namespace Orca
             return instr;
         }
 
+        /// <summary>
+        /// Sends a SwapV2 transaction.
+        /// </summary>
+        /// <param name="accounts">The accounts for the SwapV2 instruction.</param>
+        /// <param name="amount">The amount to swap.</param>
+        /// <param name="otherAmountThreshold">The other amount threshold.</param>
+        /// <param name="sqrtPriceLimit">The sqrt price limit.</param>
+        /// <param name="amountSpecifiedIsInput">Whether the amount specified is input.</param>
+        /// <param name="aToB">Whether the swap is from A to B.</param>
+        /// <param name="feePayer">The fee payer for the transaction.</param>
+        /// <param name="signingCallback">The callback for signing the transaction.</param>
+        /// <param name="programId">The program ID.</param>
+        /// <param name="supplementalTickArrays">Optional list of supplemental tick arrays.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the request result.</returns>
+        public async Task<RequestResult<string>> SendSwapV2Async(SwapV2Accounts accounts, ulong amount, ulong otherAmountThreshold, BigInteger sqrtPriceLimit, bool amountSpecifiedIsInput, bool aToB, PublicKey feePayer, Func<byte[], PublicKey, byte[]> signingCallback, PublicKey programId, List<AccountMeta> supplementalTickArrays = null)
+        {
+            TransactionInstruction instr = WhirlpoolProgram.SwapV2(
+                accounts, amount, otherAmountThreshold,
+                sqrtPriceLimit, amountSpecifiedIsInput,
+                aToB, programId, supplementalTickArrays
+            );
+            return await SignAndSendTransaction2(instr, feePayer, signingCallback, commitment: DefaultCommitment);
+        }
+
+        /// <summary>
+        /// Gets Instructions for a SwapV2 transaction.
+        /// </summary>
+        /// <param name="accounts">The accounts for the SwapV2 instruction.</param>
+        /// <param name="amount">The amount to swap.</param>
+        /// <param name="otherAmountThreshold">The other amount threshold.</param>
+        /// <param name="sqrtPriceLimit">The sqrt price limit.</param>
+        /// <param name="amountSpecifiedIsInput">Whether the amount specified is input.</param>
+        /// <param name="aToB">Whether the swap is from A to B.</param>
+        /// <param name="feePayer">The fee payer for the transaction.</param>
+        /// <param name="signingCallback">The callback for signing the transaction.</param>
+        /// <param name="programId">The program ID.</param>
+        /// <param name="supplementalTickArrays">Optional list of supplemental tick arrays.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the request result.</returns>
+        public async Task<TransactionInstruction> GetSwapV2InstructionsAsync(SwapV2Accounts accounts,ulong amount,ulong otherAmountThreshold,BigInteger sqrtPriceLimit,bool amountSpecifiedIsInput,bool aToB,PublicKey programId,List<AccountMeta> supplementalTickArrays = null)
+        {
+            await Task.Yield(); // Ensure it's treated as an async method by the compiler.
+            return WhirlpoolProgram.SwapV2(
+                accounts,amount,otherAmountThreshold,
+                sqrtPriceLimit,amountSpecifiedIsInput,
+                aToB,programId,supplementalTickArrays
+            );
+        }
+
+        /// <summary>
+        /// Sends a transaction to close a position with Token-2022 extensions.
+        /// </summary>
+        /// <param name="accounts">The accounts for the ClosePositionV2 instruction.</param>
+        /// <param name="feePayer">The fee payer for the transaction.</param>
+        /// <param name="signingCallback">The callback for signing the transaction.</param>
+        /// <param name="programId">The program ID.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the request result.</returns>
+        public async Task<RequestResult<string>> SendClosePositionV2(
+            ClosePositionWithTokenExtensionsAccounts accounts,PublicKey feePayer,Func<byte[], PublicKey, byte[]> signingCallback,PublicKey programId)
+        {
+            TransactionInstruction instr = WhirlpoolProgram.ClosePositionV2(accounts, programId);
+            return await SignAndSendTransaction2(instr, feePayer, signingCallback, commitment: DefaultCommitment);
+        }
+
+        /// <summary>
+        /// Sends a transaction to open a position with Token-2022 extensions.
+        /// </summary>
+        /// <param name="accounts">The accounts for the OpenPositionV2 instruction.</param>
+        /// <param name="bumps">The bumps for PDAs related to the position and its metadata.</param>
+        /// <param name="tickLowerIndex">The lower tick index for the position.</param>
+        /// <param name="tickUpperIndex">The upper tick index for the position.</param>
+        /// <param name="feePayer">The fee payer for the transaction.</param>
+        /// <param name="signingCallback">The callback for signing the transaction.</param>
+        /// <param name="programId">The program ID.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the request result.</returns>
+        public async Task<RequestResult<string>> SendOpenPositionV2(
+            OpenPositionWithTokenExtensionsAccounts accounts,OpenPositionWithMetadataBumps bumps,int tickLowerIndex,
+            int tickUpperIndex,PublicKey feePayer, Func<byte[], PublicKey, byte[]> signingCallback,PublicKey programId)
+        {
+            TransactionInstruction instr = WhirlpoolProgram.OpenPositionV2(
+                accounts,
+                bumps,
+                tickLowerIndex,
+                tickUpperIndex,
+                programId
+            );
+            return await SignAndSendTransaction2(instr, feePayer, signingCallback, commitment: DefaultCommitment);
+        }
+
         public async Task<RequestResult<string>> SendClosePositionAsync(ClosePositionAccounts accounts, PublicKey feePayer, Func<byte[], PublicKey, byte[]> signingCallback, PublicKey programId)
         {
             Solnet.Rpc.Models.TransactionInstruction instr = WhirlpoolProgram.ClosePosition(accounts, programId);

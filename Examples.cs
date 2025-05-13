@@ -17,13 +17,217 @@ using Solnet.Programs.Abstract;
 using System.Collections;
 using System.Numerics;
 using Solnet.Rpc.Core.Http;
+using Solnet.Programs;
+using Solnet.Programs.Models.NameService;
+using Solnet.Rpc.Types;
+using System;
+using Org.BouncyCastle.Asn1.X509;
+using Org.BouncyCastle.Crypto;
+using Solnet.Rpc.Messages;
+using Orca.Types;
 
 public class Program
 {
     const string pubKey = "";
     const string privKey = "";
 
-    public static async Task Main(string[] args)
+    public static async Task Main(string[] agrs)
+    {
+        await SwapTest();
+        await OtherTests();
+
+        //OpenPosition & ClosePosition Examples
+        //OrcaAPI orcaAPI = new OrcaAPI(pubKey, privKey);
+        //string posAccount = await OpenToken2022Position(orcaAPI, "C9U2Ksk6KKWvLEeo5yUQ7Xu46X7NzeBJtd9PBfuXaUSM", -12800, 12800);
+        //await Task.Delay(1000);
+        //await CloseToken2022Position(orcaAPI, new PublicKey(posAccount), new PublicKey("C9U2Ksk6KKWvLEeo5yUQ7Xu46X7NzeBJtd9PBfuXaUSM"));
+    }
+
+    public static async Task SwapTest()
+    {
+        //Input Info: User wants to swap Fartcoin for WSOL
+        PublicKey tokenA = new PublicKey("So11111111111111111111111111111111111111112"); // SOL (Pools seem to start tokenA as SOL)
+        PublicKey tokenB = new PublicKey("9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump"); // Fartcoin
+        string poolID = "C9U2Ksk6KKWvLEeo5yUQ7Xu46X7NzeBJtd9PBfuXaUSM"; // Example Pool ID for Fartcoin/SOL
+        decimal amountIn = 0.01m; // 1 SOL
+        SwapDirection swapDirection = SwapDirection.AtoB; // AtoB direction (SOL->Fartcoin)
+
+        // Create an instance of OrcaAPI
+        OrcaAPI orcaAPI = new OrcaAPI(pubKey, privKey);
+        int tokenInputDecimals = 6; // Fartcoin has 6 decimals
+        BigInteger amountLamports = 0;
+
+        // Grab Decimals & Calculate Lamports
+        if (swapDirection == SwapDirection.AtoB)
+        {
+            var TokenInfo = await orcaAPI.rpcClient.GetTokenMintInfoAsync(tokenA.ToString());
+            if (TokenInfo.WasSuccessful && TokenInfo.Result.Value != null)
+                tokenInputDecimals = TokenInfo.Result.Value.Data.Parsed.Info.Decimals;
+            amountLamports = (BigInteger)(amountIn * (decimal)BigInteger.Pow(10, tokenInputDecimals));
+            Console.WriteLine($"Swap amount using Lamports: {amountLamports} of {tokenA}");
+        }
+        if (swapDirection == SwapDirection.BtoA)
+        {
+            var TokenInfo = await orcaAPI.rpcClient.GetTokenMintInfoAsync(tokenB.ToString());
+            if (TokenInfo.WasSuccessful && TokenInfo.Result.Value != null)
+                tokenInputDecimals = TokenInfo.Result.Value.Data.Parsed.Info.Decimals;
+            amountLamports = (BigInteger)(amountIn * (decimal)BigInteger.Pow(10, tokenInputDecimals));
+            Console.WriteLine($"Swap amount using Lamports: {amountLamports} of {tokenB}");
+        }
+
+        // Call the ExecuteSwapAsync method on the orcaAPI instance
+        await orcaAPI.ExecuteSwapAsync(
+            tokenA,
+            tokenB,
+            poolID,
+            amountLamports,
+            swapDirection,
+            true     // Unwrap WSOL if needed
+        );
+    }
+
+    public static async Task<string> OpenToken2022Position(OrcaAPI orcaApi, string poolID, int tickLowerIndex, int tickUpperIndex)
+    {
+        Console.WriteLine("Attempting to open a Token-2022 position...");
+
+        // 1. Generate a new keypair for the position mint. This will be a Token-2022 mint.
+        Account positionMintAccount = new Account();
+        Console.WriteLine($"Generated new Position Mint: {positionMintAccount.PublicKey}");
+
+        // 2. Define the funder (usually the OrcaAPI's configured account)
+        Account funderAccount = orcaApi.account;
+        PublicKey ownerAccount = orcaApi.account.PublicKey;
+
+        // 3. Derive PDAs
+        // The position PDA is derived using the position mint
+        Pda positionPda = PdaUtils.GetPosition(orcaApi.ctx.ProgramId, positionMintAccount.PublicKey);
+        // The metadata PDA for the position mint (Token-2022 NFTs often have metadata)
+        Pda metadataPda = PdaUtils.GetPositionMetadata(positionMintAccount.PublicKey);
+
+        Console.WriteLine($"Derived Position PDA: {positionPda.PublicKey}");
+        Console.WriteLine($"Derived Metadata PDA: {metadataPda.PublicKey}");
+        bool is2022Token = await TokenInfo.IsToken2022(orcaApi.rpcClient, positionMintAccount.PublicKey);
+
+        // 4. Prepare accounts for the instruction
+        var openPositionAccounts = new OpenPositionWithTokenExtensionsAccounts
+        {
+            Funder = funderAccount.PublicKey,
+            Owner = ownerAccount,
+            Position = positionPda.PublicKey,
+            PositionMint = positionMintAccount.PublicKey,
+            PositionMetadataAccount = metadataPda.PublicKey,
+            // The PositionTokenAccount will be an ATA derived for the owner and the new positionMint
+            PositionTokenAccount = TokenInfo.DeriveAssociatedTokenAccount(ownerAccount, positionMintAccount.PublicKey, is2022Token),
+            Whirlpool = new PublicKey(poolID),
+            Token2022Program = TokenInfo.TOKEN_2022_PROGRAM_ID, // Crucial for Token-2022
+            SystemProgram = SystemProgram.ProgramIdKey,
+            Rent = SysVars.RentKey,
+            AssociatedTokenProgram = AddressConstants.ASSOCIATED_TOKEN_PROGRAM_PUBKEY,
+            MetadataProgram = AddressConstants.METADATA_PROGRAM_PUBKEY,
+            MetadataUpdateAuth = AddressConstants.METADATA_UPDATE_AUTH_PUBKEY // Or appropriate authority
+        };
+
+        // 5. Prepare bumps
+        var bumps = new OpenPositionWithMetadataBumps // Reusing bumps from metadata variant
+        {
+            PositionBump = positionPda.Bump,
+            MetadataBump = metadataPda.Bump
+        };
+
+        // 6. Create a signing callback. The funder and the new positionMintAccount need to sign.
+        var signers = new List<Account> { funderAccount, positionMintAccount };
+        SigningCallback signingCallback = new SigningCallback(signers, funderAccount);
+
+        try
+        {
+            // 7. Send the transaction using WhirlpoolClient
+            RequestResult<string> result = await orcaApi.ctx.WhirlpoolClient.SendOpenPositionV2(
+                openPositionAccounts,
+                bumps,
+                tickLowerIndex,
+                tickUpperIndex,
+                funderAccount.PublicKey, // Fee payer
+                signingCallback.Sign,    // Signing callback
+                orcaApi.ctx.ProgramId
+            );
+
+            if (result.WasSuccessful)
+            {
+                Console.WriteLine($"Successfully opened Token-2022 position! Signature: {result.Result}");
+                return result.Result;
+            }
+            else
+            {
+                Console.WriteLine($"Failed to open Token-2022 position: {result.Reason}");
+                Console.WriteLine($"Raw RPC Response: {result.RawRpcResponse}");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"An error occurred while opening Token-2022 position: {ex.Message}");
+            return null;
+        }
+    }
+
+    public static async Task<string> CloseToken2022Position(OrcaAPI orcaApi, PublicKey positionMintToClose, PublicKey positionAccountKey)
+    {
+        Console.WriteLine($"Attempting to close Token-2022 position for mint: {positionMintToClose}...");
+
+        // 1. Define accounts
+        Account positionAuthorityAccount = orcaApi.account; // The owner of the position
+        PublicKey receiverAccount = orcaApi.account.PublicKey; // Account to receive reclaimed lamports
+
+        // The PositionTokenAccount is the ATA for the position owned by the positionAuthority
+        PublicKey positionTokenAccount = TokenInfo.DeriveAssociatedTokenAccount(
+            positionAuthorityAccount.PublicKey,
+            positionMintToClose,  //Mint
+            await TokenInfo.IsToken2022(orcaApi.rpcClient, positionMintToClose) //Is 2022 token?
+        );
+
+        var closePositionAccounts = new ClosePositionWithTokenExtensionsAccounts
+        {
+            PositionAuthority = positionAuthorityAccount.PublicKey,
+            Receiver = receiverAccount,
+            Position = positionAccountKey, // This is the PDA of the Position account itself
+            PositionMint = positionMintToClose,
+            PositionTokenAccount = positionTokenAccount,
+            Token2022Program = TokenInfo.TOKEN_2022_PROGRAM_ID // Crucial
+        };
+
+        // 2. Create signing callback (only positionAuthority needs to sign)
+        SigningCallback signingCallback = new SigningCallback(new List<Account> { positionAuthorityAccount }, positionAuthorityAccount);
+
+        try
+        {
+            // 3. Send the transaction using WhirlpoolClient
+            RequestResult<string> result = await orcaApi.ctx.WhirlpoolClient.SendClosePositionV2(
+                closePositionAccounts,
+                positionAuthorityAccount.PublicKey, // Fee payer
+                signingCallback.Sign,
+                orcaApi.ctx.ProgramId
+            );
+
+            if (result.WasSuccessful)
+            {
+                Console.WriteLine($"Successfully closed Token-2022 position! Signature: {result.Result}");
+                return result.Result;
+            }
+            else
+            {
+                Console.WriteLine($"Failed to close Token-2022 position: {result.Reason}");
+                Console.WriteLine($"Raw RPC Response: {result.RawRpcResponse}");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"An error occurred while closing Token-2022 position: {ex.Message}");
+            return null;
+        }
+    }
+
+    public static async Task OtherTests()
     {
         OrcaAPI orcaAPI = new OrcaAPI(pubKey, privKey);
         Console.WriteLine("Orca API Setup.");
@@ -50,24 +254,23 @@ public class Program
                 pool2,
                 pool2.Address,
                 mint,
-                SolHelper.ConvertToLamports(1.5m), //amount
+                SolHelper.ConvertToLamports(0.01m), //amount
                 slippage, //slippage
                 orcaAPI.ctx.ProgramId //program ID
             );
             Console.WriteLine($"Quote Out Amount: {quote.EstimatedAmountOut}, direction: {quote.AtoB.ToString()}");
 
             //Swap With Quote
-            /*Solnet.Rpc.Models.Transaction transResult = await orcaAPI.dex.SwapWithQuote(
-                pool2.Address,
-                quote,
-                false,
-                Solnet.Rpc.Types.Commitment.Finalized); //AtoB Direction
-            */
+            //Solnet.Rpc.Models.Transaction transResult = await orcaAPI.dex.SwapWithQuote(
+               // pool2.Address,
+                //quote,
+                //false,
+                //Solnet.Rpc.Types.Commitment.Finalized); //AtoB Direction
+            //Console.WriteLine(transResult.Signatures[0]);
 
             //Pool Liquidity
             Console.WriteLine($"Pool liquidity: {pool2.Liquidity}, direction: {quote.AtoB.ToString()}");
         }
-
 
         //GET POOL ADDRESS FROM TOKENS
         PublicKey tokenA = new PublicKey("9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump");
@@ -104,32 +307,7 @@ public class Program
             Whirlpool pool3 = result2.ParsedResult;
             PublicKey[] tickArray = await orcaAPI.GetTickArrayAddresses(pool3, true);
             Pda oraclePda1 = PdaUtils.GetOracle(orcaAPI.ctx.ProgramId, new PublicKey(poolID));
-
-            SwapParams paramz = orcaAPI.GenerateSwapParams(
-                orcaAPI.ctx,
-                tokenA,      //TokenA
-                tokenB,      //TokenB
-                pool3.TokenVaultA,
-                pool3.TokenVaultB,
-                pool3.Address, //Pool Address
-                tickArray, 
-                oraclePda1.PublicKey, //Oracle Address
-                (BigInteger)amount, //Amount
-                (BigInteger)amount, //Amount Threshold
-                0, //Sqrt Price Limit
-                true, //Amount Specified is Input
-                true //AtoB Direction
-            );
-
-            //Build Transaction Instructions
-            TransactionInstruction instr = await orcaAPI.GetSwapInstructions(orcaAPI.ctx, paramz);
-            Console.WriteLine($"Got Fast Quote Trans.");
-
-            //Swap Using Parameters
-            //RequestResult<string> swapResult = await orcaAPI.SwapAsync(orcaAPI.ctx, paramz);
         }
-
-
 
         //POOL UTILS EXAMPLE
         AccountResultWrapper<Whirlpool> result = await orcaAPI.ctx.WhirlpoolClient.GetWhirlpoolAsync("C9U2Ksk6KKWvLEeo5yUQ7Xu46X7NzeBJtd9PBfuXaUSM");
